@@ -1,0 +1,211 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global safety net - Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // STANDARDIZED GLOBAL HELPERS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // VALIDATION BLUEPRINTS (The "Anti-Update-Gap" Schema Guards)
+
+    function isValidUserSchema(data) {
+      return data.keys().hasAll(['userId', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().size() >= 4
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.email is string
+        && data.email.size() <= 256
+        && (data.displayName == null || (data.displayName is string && data.displayName.size() <= 200))
+        && (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 1000));
+    }
+
+    function isValidCourseProgressSchema(data) {
+      return data.keys().hasAll(['courseId', 'userId', 'completedLessons', 'progressPercentage', 'lastAccessedAt'])
+        && data.keys().size() == 5
+        && data.courseId is string
+        && data.courseId.size() <= 128
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.progressPercentage is number
+        && data.progressPercentage >= 0
+        && data.progressPercentage <= 100
+        && data.completedLessons is list
+        && data.completedLessons.size() <= 200;
+    }
+
+    function isValidDSAProgressSchema(data) {
+      return data.keys().hasAll(['problemId', 'userId', 'status', 'submittedCode', 'language', 'attemptsCount', 'completedAt'])
+        && data.keys().size() == 7
+        && data.problemId is string
+        && data.problemId.size() <= 128
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.status is string
+        && (data.status == 'solved' || data.status == 'attempted')
+        && data.submittedCode is string
+        && data.submittedCode.size() <= 100000
+        && data.language is string
+        && data.language.size() <= 64
+        && data.attemptsCount is number
+        && data.attemptsCount >= 0;
+    }
+
+    function isValidMockTestSchema(data) {
+      return data.keys().hasAll(['testId', 'userId', 'score', 'totalQuestions', 'answers', 'completedAt'])
+        && data.keys().size() == 6
+        && data.testId is string
+        && data.testId.size() <= 128
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.score is number
+        && data.score >= 0
+        && data.totalQuestions is number
+        && data.totalQuestions >= 0
+        && data.answers is map;
+    }
+
+    function isValidUserProgressSchema(data) {
+      return data.keys().hasAll(['userId', 'assessmentId', 'questionId', 'title', 'difficulty', 'timeTakenSeconds', 'score', 'submittedCode', 'completedAt'])
+        && data.keys().size() >= 9
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.assessmentId is string
+        && data.assessmentId.size() <= 128
+        && data.questionId is string
+        && data.questionId.size() <= 128
+        && data.title is string
+        && data.title.size() <= 256
+        && data.difficulty is string
+        && (data.difficulty == 'Easy' || data.difficulty == 'Medium' || data.difficulty == 'Hard')
+        && data.timeTakenSeconds is number
+        && data.timeTakenSeconds >= 0
+        && data.score is number
+        && data.score >= 0
+        && data.submittedCode is string
+        && data.submittedCode.size() <= 100000
+        && data.completedAt is string
+        && data.completedAt.size() <= 128;
+    }
+
+    // 2. User Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isOwner(userId)
+                    && isValidUserSchema(incoming())
+                    && incoming().userId == request.auth.uid
+                    && incoming().createdAt == request.time
+                    && incoming().updatedAt == request.time;
+                    
+      allow update: if isOwner(userId)
+                    && isValidUserSchema(incoming())
+                    && incoming().userId == existing().userId
+                    && incoming().email == existing().email
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+                    );
+                    
+      allow delete: if false; // Profiles cannot be directly deleted by client
+    }
+
+    // 3. Course Progress Subcollections
+    match /users/{userId}/courseProgress/{courseId} {
+      allow read: if isOwner(userId);
+      
+      allow create: if isOwner(userId)
+                    && isValidId(courseId)
+                    && isValidCourseProgressSchema(incoming())
+                    && incoming().userId == userId
+                    && incoming().courseId == courseId
+                    && incoming().lastAccessedAt == request.time;
+                    
+      allow update: if isOwner(userId)
+                    && isValidId(courseId)
+                    && isValidCourseProgressSchema(incoming())
+                    && incoming().userId == userId
+                    && incoming().courseId == courseId
+                    && incoming().lastAccessedAt == request.time
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasAll(['completedLessons', 'progressPercentage', 'lastAccessedAt'])
+                      || incoming().diff(existing()).affectedKeys().hasOnly(['completedLessons', 'progressPercentage', 'lastAccessedAt'])
+                    );
+                    
+      allow delete: if isOwner(userId);
+    }
+
+    // 4. DSA Progress Subcollections
+    match /users/{userId}/dsaProgress/{problemId} {
+      allow read: if isOwner(userId);
+      
+      allow create: if isOwner(userId)
+                    && isValidId(problemId)
+                    && isValidDSAProgressSchema(incoming())
+                    && incoming().userId == userId
+                    && incoming().problemId == problemId
+                    && incoming().completedAt == request.time;
+                    
+      allow update: if isOwner(userId)
+                    && isValidId(problemId)
+                    && isValidDSAProgressSchema(incoming())
+                    && incoming().userId == userId
+                    && incoming().problemId == problemId
+                    && incoming().completedAt == request.time
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status', 'submittedCode', 'language', 'attemptsCount', 'completedAt'])
+                    );
+                    
+      allow delete: if isOwner(userId);
+    }
+
+    // 5. Mock Test Results Subcollections
+    match /users/{userId}/mockTests/{testId} {
+      allow read: if isOwner(userId);
+      
+      allow create: if isOwner(userId)
+                    && isValidId(testId)
+                    && isValidMockTestSchema(incoming())
+                    && incoming().userId == userId
+                    && incoming().testId == testId
+                    && incoming().completedAt == request.time;
+                    
+      allow update, delete: if false; // Mock test entries are immutable once submitted
+    }
+
+    // 6. User Progress Collection (timed assessment tracking)
+    match /user_progress/{progressId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn()
+                    && isValidId(progressId)
+                    && isValidUserProgressSchema(incoming())
+                    && incoming().userId == request.auth.uid;
+                    
+      allow update, delete: if false; // Individual test progression details are immutable
+    }
+  }
+}

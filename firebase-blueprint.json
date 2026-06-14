@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and metadata synced between platforms.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique Firebase Authentication UID of the user." },
+        "email": { "type": "string", "format": "email", "description": "The user's registered email address." },
+        "displayName": { "type": "string", "description": "The user's display name." },
+        "photoURL": { "type": "string", "description": "URL of the user's profile picture." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when account was created." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp when account profile was last updated." }
+      },
+      "required": ["userId", "email", "createdAt", "updatedAt"]
+    },
+    "CourseProgress": {
+      "title": "CourseProgress",
+      "description": "Progress of a user within a specific learning course (Python, Java, C, etc.).",
+      "type": "object",
+      "properties": {
+        "courseId": { "type": "string", "description": "Identifier of the course (e.g. python, java, c)." },
+        "userId": { "type": "string", "description": "The UID of the student." },
+        "completedLessons": { "type": "array", "description": "List of lessons/chapters completed.", "items": { "type": "string" } },
+        "progressPercentage": { "type": "number", "description": "Percentage of course completed." },
+        "lastAccessedAt": { "type": "string", "format": "date-time", "description": "Last time user accessed this course." }
+      },
+      "required": ["courseId", "userId", "completedLessons", "progressPercentage", "lastAccessedAt"]
+    },
+    "DSAProblemProgress": {
+      "title": "DSAProblemProgress",
+      "description": "Progress tracking for a specific Data Structure and Algorithm problem.",
+      "type": "object",
+      "properties": {
+        "problemId": { "type": "string", "description": "The unique identifier of the DSA problem." },
+        "userId": { "type": "string", "description": "The UID of the student." },
+        "status": { "type": "string", "enum": ["solved", "attempted"], "description": "Completion status." },
+        "submittedCode": { "type": "string", "description": "The user's submitted and accepted code solution." },
+        "language": { "type": "string", "description": "Code language." },
+        "attemptsCount": { "type": "number", "description": "Total attempts." },
+        "completedAt": { "type": "string", "format": "date-time", "description": "Timestamp of successful solution." }
+      },
+      "required": ["problemId", "userId", "status", "submittedCode", "language", "attemptsCount", "completedAt"]
+    },
+    "MockTestResult": {
+      "title": "MockTestResult",
+      "description": "Score record for placement preparation mock tests.",
+      "type": "object",
+      "properties": {
+        "testId": { "type": "string", "description": "The unique mock test ID." },
+        "userId": { "type": "string", "description": "The UID of the student." },
+        "score": { "type": "number", "description": "Points earned in the test." },
+        "totalQuestions": { "type": "number", "description": "Total points / questions." },
+        "answers": { "type": "object", "description": "Selected options mapping keyed by question ID." },
+        "completedAt": { "type": "string", "format": "date-time", "description": "Timestamp of test completion." }
+      },
+      "required": ["testId", "userId", "score", "totalQuestions", "answers", "completedAt"]
+    },
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Progress records tracking time taken on assessment questions.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the student." },
+        "assessmentId": { "type": "string", "description": "The unique ID of the assessment session." },
+        "questionId": { "type": "string", "description": "The unique identifier of the question." },
+        "title": { "type": "string", "description": "The title of the question." },
+        "difficulty": { "type": "string", "enum": ["Easy", "Medium", "Hard"], "description": "The difficulty level." },
+        "timeTakenSeconds": { "type": "number", "description": "Total time taken in seconds." },
+        "score": { "type": "number", "description": "Score attained (0 or 1)." },
+        "submittedCode": { "type": "string", "description": "The code submitted." },
+        "completedAt": { "type": "string", "format": "date-time", "description": "ISO timestamp when submitted." }
+      },
+      "required": ["userId", "assessmentId", "questionId", "title", "difficulty", "timeTakenSeconds", "score", "submittedCode", "completedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Profile document containing general user profile statistics and basic details."
+    },
+    "/users/{userId}/courseProgress/{courseId}": {
+      "schema": "CourseProgress",
+      "description": "Detailed progress records for each language course (Python, Java, C) under a specific user."
+    },
+    "/users/{userId}/dsaProgress/{problemId}": {
+      "schema": "DSAProblemProgress",
+      "description": "DSA achievements, tracked problems, and successfully compiled source code."
+    },
+    "/users/{userId}/mockTests/{testId}": {
+      "schema": "MockTestResult",
+      "description": "Historic placement prep mock assessment records scored by the student."
+    },
+    "/user_progress/{progressId}": {
+      "schema": "UserProgress",
+      "description": "Progress records containing timings and results of problem assessments."
+    }
+  }
+}

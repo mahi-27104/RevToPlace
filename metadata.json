@@ -1,0 +1,6 @@
+{
+  "name": "Coding Education Platform",
+  "description": "A comprehensive MNtech.sols multi-platform coding education system for Web and Android featuring interactive lesson compilers, specialized DSA modules, mock tests, and real-time Firebase state synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
