@@ -28,6 +28,8 @@ const RUNTIME_VERSIONS: Record<string, string> = {
   javascript: '18.15.0'
 };
 
+const ANCHOR_TEXT = '// Write your code here';
+
 const DEFAULT_STARTER_CODES: Record<Language, string> = {
   python: `# Python Execution Sandbox\n\ndef solve():\n    print("Hello, DSA Sandbox!")\n\nsolve()\n`,
   javascript: `// JavaScript Execution Sandbox\n\nfunction solve() {\n    console.log("Hello, DSA Sandbox!");\n}\n\nsolve();\n`,
@@ -245,6 +247,299 @@ function tokenizeCode(code: string, lang: string): Token[] {
   return tokens;
 }
 
+interface ConsoleCoordinates {
+  lineNumber: number;
+  column: number;
+}
+
+const parseLogLineCoordinates = (lineText: string, lang: string): ConsoleCoordinates | null => {
+  let lineNum: number | null = null;
+  let colNum: number | null = null;
+
+  // Pattern 1: main.cpp:12:8: error... (or similar :line:col:)
+  const fileLineColMatch = lineText.match(/(?:\w+\.\w+):(\d+):(\d+)/);
+  if (fileLineColMatch) {
+    lineNum = parseInt(fileLineColMatch[1], 10);
+    colNum = parseInt(fileLineColMatch[2], 10);
+  }
+
+  if (lineNum === null) {
+    // Pattern 2: Main.java:6: error... (or similar :line:)
+    const fileLineMatch = lineText.match(/(?:\w+\.\w+):(\d+)/);
+    if (fileLineMatch) {
+      lineNum = parseInt(fileLineMatch[1], 10);
+      colNum = 1;
+    }
+  }
+
+  if (lineNum === null) {
+    // Pattern 3: Python traceback: File "main.py", line 4, in ...
+    const pythonMatch = lineText.match(/line\s+(\d+)/i);
+    if (pythonMatch) {
+      lineNum = parseInt(pythonMatch[1], 10);
+      colNum = 1;
+    }
+  }
+
+  if (lineNum === null) {
+    // Pattern 4: JS error: at Object.<anonymous> (test.js:12:34) or similar
+    const jsFileLineColMatch = lineText.match(/:(\d+):(\d+)/);
+    if (jsFileLineColMatch) {
+      lineNum = parseInt(jsFileLineColMatch[1], 10);
+      colNum = parseInt(jsFileLineColMatch[2], 10);
+    }
+  }
+
+  if (lineNum === null) {
+    // Pattern 5: Generic col X line Y indicator
+    const genericColLine = lineText.match(/col(?:umn)?\s*(\d+).*line\s*(\d+)/i);
+    if (genericColLine) {
+      colNum = parseInt(genericColLine[1], 10);
+      lineNum = parseInt(genericColLine[2], 10);
+    } else {
+      const genericLineCol = lineText.match(/line\s*(\d+).*col(?:umn)?\s*(\d+)/i);
+      if (genericLineCol) {
+        lineNum = parseInt(genericLineCol[1], 10);
+        colNum = parseInt(genericLineCol[2], 10);
+      }
+    }
+  }
+
+  if (lineNum === null) {
+    // Last resort generic line fallback: "line X"
+    const genericLineOnly = lineText.match(/line\s*(\d+)/i);
+    if (genericLineOnly) {
+      lineNum = parseInt(genericLineOnly[1], 10);
+      colNum = 1;
+    }
+  }
+
+  if (lineNum !== null && !isNaN(lineNum)) {
+    return {
+      lineNumber: Math.max(1, lineNum),
+      column: colNum && !isNaN(colNum) ? Math.max(1, colNum) : 1
+    };
+  }
+
+  return null;
+};
+
+interface TerminalConsoleProps {
+  output: string;
+  stderr: string;
+  isRunning: boolean;
+  expectedOutput?: string;
+  parsedErrorLine: number | null;
+  customCodeErrLine: number | null;
+  isAnalyzingError: boolean;
+  aiFixExplanation: string;
+  isMatch: boolean | null;
+  compilationEngine: string;
+  language: string;
+  onLineFocus: (rawLine: number, rawColumn: number) => void;
+}
+
+const TerminalConsole: React.FC<TerminalConsoleProps> = ({
+  output,
+  stderr,
+  isRunning,
+  expectedOutput,
+  parsedErrorLine,
+  customCodeErrLine,
+  isAnalyzingError,
+  aiFixExplanation,
+  isMatch,
+  compilationEngine,
+  language,
+  onLineFocus
+}) => {
+  // Helper to render lines with clickable jump features if they contain file name/line indicators
+  const renderClickableTerminalLines = (text: string, isError: boolean) => {
+    const rawLines = text.split('\n');
+    return rawLines.map((lineText, idx) => {
+      const coords = parseLogLineCoordinates(lineText, language);
+      const isClickable = coords !== null;
+
+      return (
+        <div 
+          key={idx}
+          onClick={() => {
+            if (isClickable && coords) {
+              onLineFocus(coords.lineNumber, coords.column);
+            }
+          }}
+          className={`min-h-[1.5rem] px-2 py-0.5 rounded transition-all leading-relaxed whitespace-pre font-mono ${
+            isError 
+              ? isClickable 
+                ? 'cursor-pointer text-red-300 hover:bg-red-500/15 hover:text-red-200 border-l-2 border-red-500 pl-2 bg-red-950/20' 
+                : 'text-red-400'
+              : isClickable
+                ? 'cursor-pointer text-indigo-300 hover:bg-indigo-500/15 hover:text-indigo-200 border-l-2 border-indigo-500 pl-2 bg-indigo-950/20'
+                : 'text-slate-200'
+          }`}
+          title={isClickable && coords ? `Click to target Editor Line ${coords.lineNumber}, Column ${coords.column}` : undefined}
+        >
+          {lineText || ' '}
+        </div>
+      );
+    });
+  };
+
+  return (
+    <div className="lg:col-span-2 flex flex-col bg-slate-950 h-full">
+      {/* Terminal Header */}
+      <div className="flex items-center px-4 py-3 border-b border-slate-900 bg-slate-900/60 justify-between">
+        <div className="flex items-center space-x-2 text-slate-300 text-xs font-mono font-medium">
+          <Terminal className="h-4 w-4 text-slate-400" />
+          <span>Interactive Terminal</span>
+        </div>
+        {expectedOutput && (
+          <div className="text-[10px] font-mono px-2 py-0.5 bg-slate-850 border border-slate-800 text-slate-400 rounded">
+            Exp: {expectedOutput}
+          </div>
+        )}
+      </div>
+
+      {/* Console Logs */}
+      <div id="compiler-console-output" className="flex-1 p-5 overflow-y-auto space-y-4 font-mono select-text text-sm">
+        <AnimatePresence mode="wait">
+          {!output && !stderr && !isRunning && (
+            <motion.div 
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-slate-500 text-center flex flex-col items-center justify-center h-full space-y-3 py-16"
+            >
+              <Cpu className="h-8 w-8 text-slate-700 animate-pulse" />
+              <p className="text-xs">Write code on the left and tap "Run Code" above.</p>
+              <p className="text-[10px] text-slate-600">Sandbox sandbox environment delivers live standard compilation.</p>
+            </motion.div>
+          )}
+
+          {isRunning && (
+            <motion.div 
+              key="running"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-slate-400 flex flex-col justify-center h-full py-16 text-center space-y-3"
+            >
+              <div className="relative flex justify-center items-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 animate-pulse"></div>
+              </div>
+              <p className="text-xs">Connecting to secure sandbox environment...</p>
+              <p className="text-[10px] text-zinc-500">Executing inside Judge0 compile containers</p>
+            </motion.div>
+          )}
+
+          {stderr && (
+            <motion.div
+              key="stderr"
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              {parsedErrorLine !== null && (
+                <div 
+                  onClick={() => onLineFocus(parsedErrorLine, 1)}
+                  className="flex items-start space-x-3 p-3 bg-red-950/40 border border-red-900/50 rounded-xl cursor-pointer hover:bg-red-950/60 hover:border-red-500/50 transition-all"
+                  title={`Click to target Syntax Alert Line ${parsedErrorLine}`}
+                >
+                  <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-red-400">
+                      Syntax Alert: Line {parsedErrorLine}
+                      {customCodeErrLine !== null && (
+                        <span className="text-[11px] text-indigo-400 ml-1.5 font-semibold">
+                          (Custom Code Line {customCodeErrLine})
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-[11px] text-red-300 font-mono mt-0.5 font-sans leading-normal">
+                      Please check and fix code syntax around line {parsedErrorLine}
+                      {customCodeErrLine !== null ? ` of your custom logical solution.` : '.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-4 bg-red-950/20 border border-red-950 text-red-400 rounded-xl text-xs overflow-x-auto whitespace-pre leading-relaxed font-mono space-y-1">
+                {renderClickableTerminalLines(stderr, true)}
+              </div>
+
+              {(isAnalyzingError || aiFixExplanation) && (
+                <div className="p-4 bg-indigo-950/35 border border-indigo-900/40 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between border-b border-indigo-900/50 pb-2">
+                    <div className="flex items-center space-x-2 text-indigo-400 text-xs font-bold">
+                      <Sparkles className="h-4 w-4 text-indigo-400 animate-pulse" />
+                      <span>Gemini AI Tutor Debugger Advice</span>
+                    </div>
+                    {isAnalyzingError && (
+                      <span className="text-[10px] font-mono text-indigo-400/80 animate-pulse">Diagnosing...</span>
+                    )}
+                  </div>
+
+                  {isAnalyzingError ? (
+                    <div className="py-4 flex flex-col items-center justify-center space-y-2 text-center">
+                      <div className="h-5 w-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                      <p className="text-indigo-300 text-[11px]">Analyzing error reports and code layout...</p>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-300 leading-relaxed font-sans prose prose-invert prose-xs max-w-none">
+                      <ReactMarkdown>{aiFixExplanation}</ReactMarkdown>
+                    </div>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {output && (
+            <motion.div
+              key="stdout"
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <div className="p-4 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl text-xs overflow-x-auto whitespace-pre leading-relaxed space-y-1">
+                {renderClickableTerminalLines(output, false)}
+              </div>
+
+              {isMatch === true && (
+                <div className="flex items-center space-x-3 p-3.5 bg-emerald-950/30 border border-emerald-900/50 rounded-xl text-emerald-400 text-xs">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0" />
+                  <div>
+                    <span className="font-bold">Test Verification Passed!</span>
+                    <p className="text-[10px] text-emerald-500/85 mt-0.5">Your console output matches the lesson expectation criteria perfectly. Progress synced!</p>
+                  </div>
+                </div>
+              )}
+
+              {isMatch === false && (
+                <div className="flex items-start space-x-3 p-3.5 bg-amber-950/30 border border-amber-900/50 rounded-xl text-amber-500 text-xs">
+                  <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Output Mismatch</span>
+                    <p className="text-[10.5px] text-amber-400/80 mt-1">Expected Output:</p>
+                    <pre className="bg-amber-950/50 rounded p-1.5 font-mono text-[10px] text-amber-300 mt-1 max-w-full overflow-x-auto">
+                      {expectedOutput}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Footer info brand */}
+      <div className="px-4 py-2.5 bg-slate-950 border-t border-slate-900 text-center text-[10px] text-slate-600 tracking-tight font-sans flex items-center justify-between">
+        <span>Sandbox Engine: <span className="text-slate-400 font-mono font-semibold">{compilationEngine ? compilationEngine.toUpperCase() : 'JUDGE0'}</span></span>
+        <span>Powered by remote secure containers.</span>
+      </div>
+    </div>
+  );
+};
+
 export default function Compiler({ 
   initialLanguage, 
   initialCode, 
@@ -272,6 +567,169 @@ export default function Compiler({
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Unified Anchor-Biased Seek API and Editor Model Generator
+  const getEditorModelInstance = () => {
+    const el = textareaRef.current;
+    if (!el) return null;
+
+    return {
+      revealLineInCenter: (lineNum: number) => {
+        const linesList = el.value.replace(/\r/g, '').split('\n');
+        const numLines = linesList.length;
+        if (numLines === 0) return;
+
+        const scrollHeight = el.scrollHeight;
+        const lineHeight = scrollHeight / numLines;
+        const targetScrollTop = (lineNum - 1) * lineHeight - (el.clientHeight / 2) + (lineHeight / 2);
+        el.scrollTop = Math.max(0, targetScrollTop);
+      },
+      setPosition: (pos: { lineNumber: number; column: number }) => {
+        const linesList = el.value.replace(/\r/g, '').split('\n');
+        let offset = 0;
+        for (let i = 0; i < Math.min(pos.lineNumber - 1, linesList.length); i++) {
+          offset += linesList[i].length + 1;
+        }
+        const targetLineText = linesList[Math.min(pos.lineNumber - 1, linesList.length - 1)] || '';
+        offset += Math.min(pos.column - 1, targetLineText.length);
+
+        el.focus();
+        el.setSelectionRange(offset, offset);
+      },
+      getModel: () => {
+        return {
+          getLineCount: () => {
+            return el.value.split('\n').length;
+          },
+          getLineMaxColumn: (lineNum: number) => {
+            const linesList = el.value.split('\n');
+            const targetLine = linesList[lineNum - 1] || '';
+            return targetLine.length + 1;
+          },
+          findMatches: (searchText: string) => {
+            const content = el.value;
+            let pos = content.indexOf(searchText);
+            let matchedText = searchText;
+
+            // Robust dynamic comments check for non-default boilerplate anchors
+            if (pos === -1) {
+              const pythonAnchorByLang = searchText.replace(/^\/\//, '#');
+              pos = content.indexOf(pythonAnchorByLang);
+              if (pos !== -1) {
+                matchedText = pythonAnchorByLang;
+              } else {
+                // Seek alternative placeholder lines
+                const alternateAnchors = [
+                  '// Write your logic here',
+                  '# Write your logic here',
+                  '// Your code starts here',
+                  '# Your code starts here',
+                  '// Write your code/logic here',
+                  '# Write your code/logic here'
+                ];
+                for (const alt of alternateAnchors) {
+                  const altPos = content.indexOf(alt);
+                  if (altPos !== -1) {
+                    pos = altPos;
+                    matchedText = alt;
+                    break;
+                  }
+                }
+              }
+            }
+
+            if (pos !== -1) {
+              const textBefore = content.substring(0, pos);
+              const linesBeforeList = textBefore.split('\n');
+              const startLine = linesBeforeList.length;
+              const startCol = linesBeforeList[linesBeforeList.length - 1].length + 1;
+
+              const matchLines = matchedText.split('\n');
+              const endLineNumber = startLine + matchLines.length - 1;
+              const lastLineSegment = matchLines[matchLines.length - 1];
+              const endColumn = (matchLines.length === 1 ? startCol : 1) + lastLineSegment.length;
+
+              return [{
+                range: {
+                  startLineNumber: startLine,
+                  startColumn: startCol,
+                  endLineNumber: endLineNumber,
+                  endColumn: endColumn
+                }
+              }];
+            }
+            return [];
+          }
+        };
+      }
+    };
+  };
+
+  // Helper to place cursor exactly on that line and column offset using anchor model API
+  const setEditorCursorPosition = (line: number, column: number) => {
+    const editor = getEditorModelInstance();
+    if (editor) {
+      editor.setPosition({ lineNumber: line, column: column });
+    }
+  };
+
+  const autoPositionAndFocus = (codeText: string) => {
+    setTimeout(() => {
+      const editor = getEditorModelInstance();
+      if (!editor) return;
+
+      const matches = editor.getModel().findMatches(ANCHOR_TEXT);
+      if (matches && matches.length > 0) {
+        const match = matches[0];
+        const endLine = match.range.endLineNumber;
+        const endColumn = match.range.endColumn;
+        
+        console.log(`[autoPositionAndFocus] Anchor Found. Placing cursor: Line ${endLine}, Column ${endColumn}`);
+        editor.revealLineInCenter(endLine);
+        editor.setPosition({ lineNumber: endLine, column: endColumn });
+      } else {
+        const lastLineIdx = editor.getModel().getLineCount();
+        const lastColIdx = editor.getModel().getLineMaxColumn(lastLineIdx);
+        console.log(`[autoPositionAndFocus] Anchor NOT Found. Positioning at safe cursor EOF: Line ${lastLineIdx}, Col ${lastColIdx}`);
+        editor.revealLineInCenter(lastLineIdx);
+        editor.setPosition({ lineNumber: lastLineIdx, column: lastColIdx });
+      }
+    }, 50);
+  };
+
+  // Normalization layer to map arbitrary console coordinates perfectly to 1-indexed editor lines and columns
+  const normalizeCoordinates = (rawLine: number, rawColumn: number): { line: number; column: number } => {
+    const linesList = code.replace(/\r/g, '').split('\n');
+    const totalLines = linesList.length;
+    
+    // Clamp line index within the safe bounds of the document
+    const line = Math.max(1, Math.min(rawLine, totalLines));
+    
+    const targetLineText = linesList[line - 1] || '';
+    // Clamp column index within line limits (+1 for line end offset placement)
+    const column = Math.max(1, Math.min(rawColumn, targetLineText.length + 1));
+
+    return { line, column };
+  };
+
+  // Event handler for terminal interactions to synchronize and reposition editor cursor
+  const handleLineFocus = (rawLine: number, rawColumn: number) => {
+    // Validation: Log 'Target Coordinates' received by the terminal component
+    console.log(`[Synchronization Controller] Target Coordinates received from Terminal:`, { line: rawLine, column: rawColumn });
+
+    const normalized = normalizeCoordinates(rawLine, rawColumn);
+
+    // Validation: Log 'Set Coordinates' used by the editor component
+    console.log(`[Synchronization Controller] Set Coordinates applied to Editor:`, { line: normalized.line, column: normalized.column });
+
+    // Force Editor Cursor Sync and Navigation Focus
+    const editor = getEditorModelInstance();
+    if (!editor) return;
+
+    // Command editor to reveal and set cursor focus instantly
+    editor.revealLineInCenter(normalized.line);
+    editor.setPosition({ lineNumber: normalized.line, column: normalized.column });
+  };
+
   // Sync to outer changes
   useEffect(() => {
     setCurrentProblem(propCurrentProblem);
@@ -293,6 +751,9 @@ export default function Compiler({
     } else {
       setThemeId('vs-dark');
     }
+
+    // Positions cursor exactly on the boilerplate placeholder with automatic focus
+    autoPositionAndFocus(initialCode);
   }, [initialLanguage, initialCode, propCurrentProblem]);
 
   // Track lines count
@@ -419,6 +880,9 @@ export default function Compiler({
     setAiFixExplanation('');
     setIsAnalyzingError(false);
     setCompilationEngine('');
+
+    // Positions cursor exactly on the boilerplate placeholder with automatic focus
+    autoPositionAndFocus(initialCode);
   };
 
   const hasUserTypedCode = () => {
@@ -443,6 +907,9 @@ export default function Compiler({
     const newBoilerplate = getBoilerplateForProblem(currentProblem, targetLang);
     setCode(newBoilerplate);
     onChange?.(newBoilerplate);
+
+    // Positions cursor exactly on the boilerplate placeholder with automatic focus
+    autoPositionAndFocus(newBoilerplate);
   };
 
   const handleLanguageChange = (newLang: Language) => {
@@ -467,16 +934,32 @@ export default function Compiler({
     setPendingLanguage(null);
   };
 
-  const demarcationLineIndex = useMemo(() => {
-    return lines.findIndex(l => l.toLowerCase().includes('your code starts here'));
-  }, [lines]);
+  const getNormalizedLine = (compilerLine: number): number => {
+    const currentBoilerplate = getBoilerplateForProblem(currentProblem, language);
+    const boilerplateLinesList = currentBoilerplate.split('\n');
+    const anchorIdx = boilerplateLinesList.findIndex(l => 
+      l.toLowerCase().includes('your code starts here') || 
+      l.toLowerCase().includes('write your code here') || 
+      l.toLowerCase().includes('write your logic here')
+    );
+    const offset = anchorIdx !== -1 ? anchorIdx : 0;
+    return Math.max(1, compilerLine - offset);
+  };
 
   const customCodeErrLine = useMemo(() => {
-    if (parsedErrorLine !== null && demarcationLineIndex !== -1 && parsedErrorLine > demarcationLineIndex + 1) {
-      return parsedErrorLine - (demarcationLineIndex + 1);
+    if (parsedErrorLine !== null) {
+      return getNormalizedLine(parsedErrorLine);
     }
     return null;
-  }, [parsedErrorLine, demarcationLineIndex]);
+  }, [parsedErrorLine, code, language, currentProblem]);
+
+  const demarcationLineIndex = useMemo(() => {
+    return lines.findIndex(l => 
+      l.toLowerCase().includes('your code starts here') ||
+      l.toLowerCase().includes('write your code here') ||
+      l.toLowerCase().includes('write your logic here')
+    );
+  }, [lines]);
 
   // High fidelity style mappings based on theme settings
   const themeStyles = {
@@ -687,151 +1170,20 @@ export default function Compiler({
       </div>
 
       {/* Terminal Output Console Section */}
-      <div className="lg:col-span-2 flex flex-col bg-slate-950 h-full">
-        {/* Terminal Header */}
-        <div className="flex items-center px-4 py-3 border-b border-slate-900 bg-slate-900/60 justify-between">
-          <div className="flex items-center space-x-2 text-slate-300 text-xs font-mono font-medium">
-            <Terminal className="h-4 w-4 text-slate-400" />
-            <span>Interactive Terminal</span>
-          </div>
-          {expectedOutput && (
-            <div className="text-[10px] font-mono px-2 py-0.5 bg-slate-850 border border-slate-800 text-slate-400 rounded">
-              Exp: {expectedOutput}
-            </div>
-          )}
-        </div>
-
-        {/* Console Logs */}
-        <div id="compiler-console-output" className="flex-1 p-5 overflow-y-auto space-y-4 font-mono select-text text-sm">
-          <AnimatePresence mode="wait">
-            {!output && !stderr && !isRunning && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-slate-500 text-center flex flex-col items-center justify-center h-full space-y-3 py-16"
-              >
-                <Cpu className="h-8 w-8 text-slate-700 animate-pulse" />
-                <p className="text-xs">Write code on the left and tap "Run Code" above.</p>
-                <p className="text-[10px] text-slate-600">Sandbox sandbox environment delivers live standard compilation.</p>
-              </motion.div>
-            )}
-
-            {isRunning && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-slate-400 flex flex-col justify-center h-full py-16 text-center space-y-3"
-              >
-                <div className="relative flex justify-center items-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 animate-pulse"></div>
-                </div>
-                <p className="text-xs">Connecting to secure sandbox environment...</p>
-                <p className="text-[10px] text-zinc-500">Executing inside Judge0 compile containers</p>
-              </motion.div>
-            )}
-
-            {stderr && (
-              <motion.div
-                key="stderr"
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-4"
-              >
-                {parsedErrorLine !== null && (
-                  <div className="flex items-start space-x-3 p-3 bg-red-950/40 border border-red-900/50 rounded-xl">
-                    <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <h4 className="text-xs font-bold text-red-400">
-                        Syntax Alert: Line {parsedErrorLine}
-                        {customCodeErrLine !== null && (
-                          <span className="text-[11px] text-indigo-400 ml-1.5 font-semibold">
-                            (Custom Code Line {customCodeErrLine})
-                          </span>
-                        )}
-                      </h4>
-                      <p className="text-[11px] text-red-300 font-mono mt-0.5 font-sans leading-normal">
-                        Please check and fix code syntax around line {parsedErrorLine}
-                        {customCodeErrLine !== null ? ` of your custom logical solution.` : '.'}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="p-4 bg-red-950/20 border border-red-950 text-red-400 rounded-xl text-xs overflow-x-auto whitespace-pre leading-relaxed font-mono">
-                  {stderr}
-                </div>
-
-                {(isAnalyzingError || aiFixExplanation) && (
-                  <div className="p-4 bg-indigo-950/35 border border-indigo-900/40 rounded-xl space-y-3">
-                    <div className="flex items-center justify-between border-b border-indigo-900/50 pb-2">
-                      <div className="flex items-center space-x-2 text-indigo-400 text-xs font-bold">
-                        <Sparkles className="h-4 w-4 text-indigo-400 animate-pulse" />
-                        <span>Gemini AI Tutor Debugger Advice</span>
-                      </div>
-                      {isAnalyzingError && (
-                        <span className="text-[10px] font-mono text-indigo-400/80 animate-pulse">Diagnosing...</span>
-                      )}
-                    </div>
-
-                    {isAnalyzingError ? (
-                      <div className="py-4 flex flex-col items-center justify-center space-y-2 text-center">
-                        <div className="h-5 w-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-indigo-300 text-[11px]">Analyzing error reports and code layout...</p>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-300 leading-relaxed font-sans prose prose-invert prose-xs max-w-none">
-                        <ReactMarkdown>{aiFixExplanation}</ReactMarkdown>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </motion.div>
-            )}
-
-            {output && (
-              <motion.div
-                key="stdout"
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-4"
-              >
-                <div className="p-4 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl text-xs overflow-x-auto whitespace-pre leading-relaxed">
-                  {output}
-                </div>
-
-                {isMatch === true && (
-                  <div className="flex items-center space-x-3 p-3.5 bg-emerald-950/30 border border-emerald-900/50 rounded-xl text-emerald-400 text-xs">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0" />
-                    <div>
-                      <span className="font-bold">Test Verification Passed!</span>
-                      <p className="text-[10px] text-emerald-500/85 mt-0.5">Your console output matches the lesson expectation criteria perfectly. Progress synced!</p>
-                    </div>
-                  </div>
-                )}
-
-                {isMatch === false && (
-                  <div className="flex items-start space-x-3 p-3.5 bg-amber-950/30 border border-amber-900/50 rounded-xl text-amber-500 text-xs">
-                    <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold">Output Mismatch</span>
-                      <p className="text-[10.5px] text-amber-400/80 mt-1">Expected Output:</p>
-                      <pre className="bg-amber-950/50 rounded p-1.5 font-mono text-[10px] text-amber-300 mt-1 max-w-full overflow-x-auto">
-                        {expectedOutput}
-                      </pre>
-                    </div>
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Footer info brand */}
-        <div className="px-4 py-2.5 bg-slate-950 border-t border-slate-900 text-center text-[10px] text-slate-600 tracking-tight font-sans flex items-center justify-between">
-          <span>Sandbox Engine: <span className="text-slate-400 font-mono font-semibold">{compilationEngine ? compilationEngine.toUpperCase() : 'JUDGE0'}</span></span>
-          <span>Powered by remote secure containers.</span>
-        </div>
-      </div>
+      <TerminalConsole
+        output={output}
+        stderr={stderr}
+        isRunning={isRunning}
+        expectedOutput={expectedOutput}
+        parsedErrorLine={parsedErrorLine}
+        customCodeErrLine={customCodeErrLine}
+        isAnalyzingError={isAnalyzingError}
+        aiFixExplanation={aiFixExplanation}
+        isMatch={isMatch}
+        compilationEngine={compilationEngine}
+        language={language}
+        onLineFocus={handleLineFocus}
+      />
 
       {/* Custom Language Switch Confirmation Modal */}
       <AnimatePresence>
