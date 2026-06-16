@@ -240,6 +240,43 @@ export async function forceResetGuest() {
   window.location.reload();
 }
 
+export async function updateUserProfile(userId: string, displayName: string, email: string, photoURL?: string) {
+  const local = getLocalState(userId);
+  if (!local.profile) {
+    local.profile = {
+      userId,
+      email,
+      displayName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  } else {
+    local.profile.displayName = displayName;
+    local.profile.email = email;
+    if (photoURL !== undefined) {
+      local.profile.photoURL = photoURL;
+    }
+    local.profile.updatedAt = new Date().toISOString();
+  }
+  saveLocalState(userId, local);
+
+  if (!IS_SIMULATED && db) {
+    try {
+      const userDocRef = doc(db, 'users', userId);
+      await setDoc(userDocRef, {
+        displayName,
+        email,
+        photoURL: photoURL || '',
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `users/${userId}`);
+    }
+  }
+  
+  return local.profile;
+}
+
 // ----------------------------------------------------
 // EXPORTED DATABASE SYNCHRONIZATION OPERATIONS
 // ----------------------------------------------------

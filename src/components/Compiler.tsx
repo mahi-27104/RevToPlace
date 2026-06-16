@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-
+import Editor from "@monaco-editor/react";
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Play, RotateCcw, AlertTriangle, Terminal, CheckCircle2, Cpu, Sparkles, BookOpen, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -567,6 +567,8 @@ export default function Compiler({
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const preRef = useRef<HTMLPreElement>(null);
+
   // Unified Anchor-Biased Seek API and Editor Model Generator
   const getEditorModelInstance = () => {
     const el = textareaRef.current;
@@ -1082,8 +1084,7 @@ export default function Compiler({
                 className={`bg-slate-950/80 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-400 outline-none hover:border-indigo-500/50 transition cursor-pointer`}
               >
                 <option value="vs-dark">VS Dark</option>
-                <option value="vs-[#ffffff]">VS Light</option>
-                <option value="vs-light">VS Code Light</option>
+                <option value="vs-light">VS Light</option>
                 <option value="monokai">Monokai Theme</option>
               </select>
             </div>
@@ -1117,55 +1118,31 @@ export default function Compiler({
         </div>
 
         {/* Text Area & Line Numbers */}
-        <div id="compiler-editor-container" className="flex-1 flex overflow-y-auto min-h-[300px]">
-          {/* Numbers Column */}
-          <div className={`text-right select-none pr-4 text-xs font-mono flex flex-col space-y-0.5 pt-0.5 min-w-10 ${activeTheme.lineBg}`}>
-            {lines.map((_, i) => {
-              const isDemarcation = i === demarcationLineIndex;
-              return (
-                <div 
-                  key={i} 
-                  className={`h-[21px] flex items-center justify-end w-6 font-semibold transition-all ${
-                    isDemarcation 
-                      ? 'text-indigo-400 bg-indigo-500/15 border-r-2 border-indigo-500 pr-0.5' 
-                      : parsedErrorLine === i + 1 
-                        ? activeTheme.lineErrBg 
-                        : activeTheme.lineNumText
-                  }`}
-                  title={isDemarcation ? "Your customized code starts here" : undefined}
-                >
-                  {i + 1}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Interactive Tokenized TextArea */}
-          <div className={`flex-1 relative pl-4 bg-transparent`}>
-            {/* Syntax Highlighting Fake Backdrop under the transparent layer */}
-            <pre 
-              className={`pointer-events-none select-none text-sm leading-relaxed whitespace-pre px-4 pt-0.5 font-mono ${activeTheme.preColor}`}
-              style={{ lineHeight: '21px', fontFamily: '"JetBrains Mono", Courier, monospace' }}
-            >
-              {highlightedTokens}
-            </pre>
-
-            {/* Absolute overlaying Textarea matching the dimensions exactly */}
-            <textarea
-              ref={textareaRef}
-              id="compiler-code-input"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value);
-                onChange?.(e.target.value);
-              }}
-              className={`absolute inset-0 w-full h-full bg-transparent ${activeTheme.textareaText} ${activeTheme.caretColor} font-mono text-sm leading-relaxed outline-none border-none resize-none px-4 pt-0.5 overflow-hidden focus:ring-0 select-text`}
-              placeholder="Write your execution routine here..."
-              spellCheck={false}
-              style={{ lineHeight: '21px', fontFamily: '"JetBrains Mono", Courier, monospace' }}
-            />
-          </div>
-        </div>
+        <div
+  id="compiler-editor-container"
+  className="flex-1 min-h-[300px]"
+>
+  <Editor
+    height="100%"
+    language={language}
+    theme="vs-dark"
+    value={code}
+    options={{
+      minimap: { enabled: false },
+      fontSize: 14,
+      lineHeight: 21,
+      fontFamily: "JetBrains Mono",
+      automaticLayout: true,
+      scrollBeyondLastLine: false,
+      wordWrap: "on"
+    }}
+    onChange={(value) => {
+      const newCode = value || "";
+      setCode(newCode);
+      onChange?.(newCode);
+    }}
+  />
+</div>
 
       </div>
 
